@@ -178,7 +178,7 @@ export const VerifyCertificate: React.FC<VerifyCertificateProps> = ({ certificat
               type="text"
               className="form-input"
               style={{ paddingLeft: '2.75rem', height: '48px', fontSize: '0.92rem' }}
-              placeholder="Paste Solana Mint Address, Transaction Hash, or Reg No (e.g. 23-SE-30)"
+              placeholder="Paste Solana Mint Address, Transaction Hash, or Reg No (i.e. 23-SE-100)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />

@@ -110,7 +110,7 @@ export const MintForm: React.FC<MintFormProps> = ({
     const formattedRegNo = formData.studentRegNo.trim().toUpperCase();
     const REGNO_REGEX = /^\d{2}-[A-Z]{2,5}-\d{1,5}$/;
     if (!REGNO_REGEX.test(formattedRegNo)) {
-      setErrorMessage('Invalid Registration Number format! Must follow academic format e.g. "23-SE-30" (Year-Department-RollNo).');
+      setErrorMessage('Invalid Registration Number format! Must follow academic format (i.e. 23-SE-100).');
       return;
     }
 
@@ -304,7 +304,7 @@ export const MintForm: React.FC<MintFormProps> = ({
                   Registration No *
                 </label>
                 <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '600' }}>
-                  Format: 23-SE-30
+                  (i.e. 23-SE-100)
                 </span>
               </div>
               <input
