@@ -6,6 +6,7 @@ import {
   setAuthorizedAdminAddress,
   getSolflareProvider,
   getPhantomProvider,
+  isMobileDevice,
   type WalletType,
 } from '../services/walletService';
 import {
@@ -319,11 +320,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div style={{ textAlign: 'left' }}>
                     <div style={{ fontWeight: '800', fontSize: '0.95rem' }}>Solflare Wallet</div>
                     <div style={{ fontSize: '0.74rem', color: '#64748b' }}>
-                      {hasSolflare ? 'Extension detected' : 'Click to connect'}
+                      {hasSolflare ? 'Extension / In-App Detected' : isMobileDevice() ? 'Tap to open in Solflare App' : 'Click to connect'}
                     </div>
                   </div>
                 </div>
-                <span className="badge badge-active" style={{ fontSize: '0.65rem' }}>Connect</span>
+                <span className="badge badge-active" style={{ fontSize: '0.65rem' }}>
+                  {isMobileDevice() && !hasSolflare ? 'Open App' : 'Connect'}
+                </span>
               </button>
 
               {/* Phantom Button */}
@@ -359,14 +362,62 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div style={{ textAlign: 'left' }}>
                     <div style={{ fontWeight: '800', fontSize: '0.95rem' }}>Phantom Wallet</div>
                     <div style={{ fontSize: '0.74rem', color: '#64748b' }}>
-                      {hasPhantom ? 'Extension detected' : 'Click to connect'}
+                      {hasPhantom ? 'Extension / In-App Detected' : isMobileDevice() ? 'Tap to open in Phantom App' : 'Click to connect'}
                     </div>
                   </div>
                 </div>
-                <span className="badge badge-active" style={{ fontSize: '0.65rem' }}>Connect</span>
+                <span className="badge badge-active" style={{ fontSize: '0.65rem' }}>
+                  {isMobileDevice() && !hasPhantom ? 'Open App' : 'Connect'}
+                </span>
               </button>
 
             </div>
+
+            {/* Mobile In-App Browser Guide */}
+            {isMobileDevice() && !hasSolflare && !hasPhantom && (
+              <div style={{
+                marginTop: '1.25rem',
+                padding: '0.85rem',
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: '8px',
+                fontSize: '0.78rem',
+                color: '#166534',
+                lineHeight: '1.45',
+                textAlign: 'left',
+              }}>
+                <strong>📱 Mobile Users Note:</strong>
+                <div style={{ marginTop: '0.25rem' }}>
+                  Chrome/Safari mobile browsers do not support extensions. Open your <strong>Solflare App</strong>, tap the <strong>Globe / Browser icon</strong> at the bottom, and paste this URL:
+                </div>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.5rem',
+                  background: '#ffffff',
+                  padding: '0.35rem 0.6rem',
+                  borderRadius: '6px',
+                  border: '1px solid #86efac',
+                  wordBreak: 'break-all',
+                }}>
+                  <span style={{ fontSize: '0.72rem', flex: 1, fontFamily: 'var(--font-mono)' }}>
+                    {typeof window !== 'undefined' ? window.location.origin : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(window.location.origin);
+                      alert('Website link copied! Open Solflare App > Tap Browser icon at bottom > Paste URL.');
+                    }}
+                    className="btn btn-primary btn-sm"
+                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', height: 'auto', flexShrink: 0 }}
+                  >
+                    Copy Link
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div style={{
               marginTop: '1.25rem',
@@ -377,15 +428,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               color: '#475569',
               lineHeight: '1.4',
             }}>
-              Don&apos;t have an extension? Install{' '}
-              <a href="https://solflare.com" target="_blank" rel="noreferrer" style={{ color: '#ea580c', fontWeight: '700' }}>
-                Solflare
-              </a>{' '}
-              or{' '}
-              <a href="https://phantom.app" target="_blank" rel="noreferrer" style={{ color: '#4f46e5', fontWeight: '700' }}>
-                Phantom
-              </a>{' '}
-              to connect your real Solana wallet.
+              Connect your official <strong>Solflare</strong> or <strong>Phantom</strong> wallet to issue verified credentials on the Solana blockchain.
             </div>
           </div>
         </div>

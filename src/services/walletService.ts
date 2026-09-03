@@ -77,6 +77,23 @@ export function setAuthorizedAdminAddress(address: string): void {
   }
 }
 
+export function isMobileDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+}
+
+export function openSolflareMobileDeepLink(): void {
+  if (typeof window === 'undefined') return;
+  const currentUrl = encodeURIComponent(window.location.href);
+  window.location.href = `https://solflare.com/ul/v1/browse/${currentUrl}`;
+}
+
+export function openPhantomMobileDeepLink(): void {
+  if (typeof window === 'undefined') return;
+  const currentUrl = encodeURIComponent(window.location.href);
+  window.location.href = `https://phantom.app/ul/browse/${currentUrl}?ref=${currentUrl}`;
+}
+
 /**
  * Connects specifically to either Solflare or Phantom
  */
@@ -84,6 +101,10 @@ export async function connectSpecificWallet(walletType: WalletType): Promise<Wal
   if (walletType === 'solflare') {
     const provider = getSolflareProvider();
     if (!provider) {
+      if (isMobileDevice()) {
+        openSolflareMobileDeepLink();
+        throw new Error('Opening in Solflare App... Please approve connection inside Solflare or open this URL inside the Solflare App internal browser (Globe tab).');
+      }
       throw new Error('Solflare extension not found! Please install Solflare from https://solflare.com or open your browser with Solflare enabled.');
     }
 
@@ -119,6 +140,10 @@ export async function connectSpecificWallet(walletType: WalletType): Promise<Wal
   if (walletType === 'phantom') {
     const provider = getPhantomProvider();
     if (!provider) {
+      if (isMobileDevice()) {
+        openPhantomMobileDeepLink();
+        throw new Error('Opening in Phantom App... Please approve connection inside Phantom or open this URL inside the Phantom App internal browser.');
+      }
       throw new Error('Phantom extension not found! Please install Phantom from https://phantom.app or unlock your extension.');
     }
 
