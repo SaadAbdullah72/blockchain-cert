@@ -6,6 +6,12 @@ import { VerifyCertificate } from './components/VerifyCertificate';
 import { MintSuccessModal } from './components/MintSuccessModal';
 import { loadCertificates, saveCertificates } from './services/storageService';
 import {
+  fetchCertificatesFromSupabase,
+  saveCertificateToSupabase,
+  clearAllCertificatesInSupabase,
+  isSupabaseConfigured,
+} from './services/supabaseService';
+import {
   connectSpecificWallet,
   disconnectSolanaWallet,
   fetchBalance,
@@ -46,6 +52,20 @@ export const App: React.FC = () => {
   useEffect(() => {
     saveCertificates(certificates);
   }, [certificates]);
+
+  // Initial Sync from Central Supabase Database
+  useEffect(() => {
+    if (isSupabaseConfigured()) {
+      console.log('🔄 Fetching certificates from Central Supabase Database...');
+      fetchCertificatesFromSupabase().then((dbCerts) => {
+        if (dbCerts && dbCerts.length > 0) {
+          console.log(`✅ Loaded ${dbCerts.length} certificates from Supabase`);
+          setCertificates(dbCerts);
+          saveCertificates(dbCerts);
+        }
+      });
+    }
+  }, []);
 
   const handleSelectWallet = async (type: WalletType) => {
     setWallet((prev) => ({ ...prev, isConnecting: true }));
@@ -103,6 +123,13 @@ export const App: React.FC = () => {
       };
 
       setCertificates((prev) => [newCert, ...prev]);
+
+      // Save to Central Supabase DB
+      if (isSupabaseConfigured()) {
+        saveCertificateToSupabase(newCert).catch((err) => {
+          console.warn('Could not sync newly minted cert to Supabase:', err);
+        });
+      }
       
       // Update balance
       if (wallet.publicKey) {
@@ -155,7 +182,14 @@ export const App: React.FC = () => {
               window.history.pushState({}, '', `?verify=${encodeURIComponent(id)}`);
               setActiveTab('verify');
             }}
-            onClearAll={() => setCertificates([])}
+            onClearAll={() => {
+              if (isSupabaseConfigured()) {
+                clearAllCertificatesInSupabase().catch((err) => {
+                  console.warn('Could not clear Supabase:', err);
+                });
+              }
+              setCertificates([]);
+            }}
           />
         )}
 
