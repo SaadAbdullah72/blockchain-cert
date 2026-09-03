@@ -1,8 +1,15 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Certificate, CertificateType, PerformanceLevel } from '../types/certificate';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_URL =
+  (import.meta.env as any).NEXT_PUBLIC_SUPABASE_URL ||
+  import.meta.env.VITE_SUPABASE_URL ||
+  'https://jfhzjbgrbhmjwyvaaegm.supabase.co';
+
+const SUPABASE_ANON_KEY =
+  (import.meta.env as any).NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  'sb_publishable_sIaC78yimHI7k2c3B6K7vw_n2gNU8bi';
 
 let supabaseInstance: SupabaseClient | null = null;
 
