@@ -408,41 +408,23 @@ export async function mintCertificateOnSolana(params: {
   // Partial sign with the newly generated Mint Keypair
   transaction.partialSign(nftMintKeypair);
 
-  // 8. Sign and Send with Connected Wallet (Solflare or Phantom)
-  let txSignature: string;
+  // 9. Sign with wallet (sign-only, we send manually for reliability)
+  let signedTransaction: any;
 
   const solflare = getSolflareProvider();
   const phantom = getPhantomProvider();
 
   try {
     if (solflare && solflare.isSolflare && solflare.publicKey?.toString() === connectedWalletAddress) {
-      if ((solflare as any).signAndSendTransaction) {
-        const res = await (solflare as any).signAndSendTransaction(transaction);
-        txSignature = res.signature || (typeof res === 'string' ? res : '');
-      } else {
-        const signed = await solflare.signTransaction!(transaction);
-        txSignature = await connection.sendRawTransaction(signed.serialize());
-      }
+      signedTransaction = await solflare.signTransaction!(transaction);
     } else if (phantom && phantom.publicKey?.toString() === connectedWalletAddress) {
-      if ((phantom as any).signAndSendTransaction) {
-        const res = await (phantom as any).signAndSendTransaction(transaction);
-        txSignature = res.signature || (typeof res === 'string' ? res : '');
-      } else {
-        const signed = await phantom.signTransaction!(transaction);
-        txSignature = await connection.sendRawTransaction(signed.serialize());
-      }
+      signedTransaction = await phantom.signTransaction!(transaction);
     } else {
       const provider = window.solflare || window.phantom?.solana || window.solana;
       if (!provider) {
         throw new Error('No Solana wallet extension found to sign transaction. Please unlock Solflare or Phantom.');
       }
-      if ((provider as any).signAndSendTransaction) {
-        const res = await (provider as any).signAndSendTransaction(transaction);
-        txSignature = res.signature || (typeof res === 'string' ? res : '');
-      } else {
-        const signed = await provider.signTransaction!(transaction);
-        txSignature = await connection.sendRawTransaction(signed.serialize());
-      }
+      signedTransaction = await provider.signTransaction!(transaction);
     }
   } catch (signErr: any) {
     console.error('Wallet signing rejected or failed:', signErr);
@@ -452,18 +434,51 @@ export async function mintCertificateOnSolana(params: {
     if (signErr.message?.includes('network') || signErr.message?.includes('mismatch')) {
       throw new Error(`Network Mismatch: Please ensure your Solflare/Phantom wallet extension is set to "${cluster.toUpperCase()}" in wallet settings.`);
     }
-    throw new Error(signErr.message || 'Failed to sign and broadcast transaction with Solana wallet.');
+    throw new Error(signErr.message || 'Failed to sign transaction with Solana wallet.');
   }
 
-  // 9. Confirm Transaction on Solana Cluster
-  await connection.confirmTransaction(
-    {
-      signature: txSignature,
-      blockhash,
-      lastValidBlockHeight,
-    },
-    'confirmed'
-  );
+  // 10. Send raw transaction with retries (skipPreflight avoids double-simulation overhead on devnet)
+  const txSignature = await connection.sendRawTransaction(signedTransaction.serialize(), {
+    skipPreflight: true,
+    maxRetries: 5,
+    preflightCommitment: 'confirmed',
+  });
+
+  console.log('📡 Transaction sent:', txSignature);
+
+  // 11. Confirm transaction with polling (more reliable than WebSocket on devnet)
+  const POLL_INTERVAL = 2000; // 2 seconds
+  const MAX_POLLS = 45;       // up to 90 seconds
+  let confirmed = false;
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const { value: statuses } = await connection.getSignatureStatuses([txSignature]);
+    const status = statuses?.[0];
+
+    if (status) {
+      if (status.err) {
+        console.error('Transaction failed on-chain:', status.err);
+        throw new Error(`Transaction failed on Solana: ${JSON.stringify(status.err)}`);
+      }
+      if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+        confirmed = true;
+        console.log('✅ Transaction confirmed:', status.confirmationStatus);
+        break;
+      }
+    }
+
+    // Check if blockhash expired
+    const blockHeight = await connection.getBlockHeight('confirmed');
+    if (blockHeight > lastValidBlockHeight) {
+      throw new Error('Transaction expired. Solana Devnet may be congested — please try again.');
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+  }
+
+  if (!confirmed) {
+    throw new Error('Transaction confirmation timed out. It may still succeed — check Solana Explorer with your signature.');
+  }
 
   const slotNumber = await connection.getSlot('confirmed');
   const solanaMintAddress = nftMintKeypair.publicKey.toBase58();
