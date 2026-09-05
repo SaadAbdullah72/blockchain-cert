@@ -299,7 +299,22 @@ export async function mintCertificateOnSolana(params: {
     )
   );
 
-  // G) Metaplex Metadata Account (Available on Devnet & Mainnet!)
+  // E) FREEZE Student's ATA — makes this certificate NON-TRANSFERABLE!
+  //    MUST run BEFORE Metaplex Master Edition, because Master Edition transfers
+  //    freeze_authority to its PDA (which nobody controls). So we freeze now while
+  //    issuerPubkey still has freeze_authority. After Master Edition, the freeze
+  //    becomes PERMANENT and IRREVOCABLE — nobody can ever unfreeze it.
+  transaction.add(
+    createFreezeAccountInstruction(
+      studentTokenAccount,        // the student's token account to freeze
+      nftMintKeypair.publicKey,   // the NFT mint
+      issuerPubkey,               // freeze_authority = SoftDesk wallet (still valid here)
+      [],
+      TOKEN_PROGRAM_ID
+    )
+  );
+
+  // F) Metaplex Metadata Account (Available on Devnet & Mainnet!)
   if (cluster === 'devnet') {
     // Upload image + build proper Metaplex JSON metadata file hosted on public CDN
     const nftName = `SoftDesk - ${formData.certificateType.slice(0, 20)}`.slice(0, 32);
@@ -366,21 +381,7 @@ export async function mintCertificateOnSolana(params: {
     );
   }
 
-  // H) FREEZE Student's ATA — makes this certificate NON-TRANSFERABLE!
-  //    Must run AFTER Metaplex Master Edition (which internally handles mint authority).
-  //    A frozen token account cannot send or receive tokens under any circumstance.
-  //    SoftDesk retains freeze_authority (can unfreeze only if certificate needs to be revoked).
-  transaction.add(
-    createFreezeAccountInstruction(
-      studentTokenAccount,        // the student's token account to freeze
-      nftMintKeypair.publicKey,   // the NFT mint
-      issuerPubkey,               // freeze_authority = SoftDesk connected wallet
-      [],
-      TOKEN_PROGRAM_ID
-    )
-  );
-
-  // I) Solana Memo Program: Permanently stamps the certificate hash & student metadata on the Solana ledger
+  // H) Solana Memo Program: Permanently stamps the certificate hash & student metadata on the Solana ledger
   const memoPayload = JSON.stringify({
     certId,
     regNo: formData.studentRegNo.trim().toUpperCase(),
