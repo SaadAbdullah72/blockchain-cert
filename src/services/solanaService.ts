@@ -387,7 +387,7 @@ export async function mintCertificateOnSolana(params: {
           { pubkey: issuerPubkey, isSigner: true, isWritable: false }, // mint_authority
           { pubkey: issuerPubkey, isSigner: true, isWritable: true }, // payer
           { pubkey: metadataPda, isSigner: false, isWritable: true },
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
         ],
