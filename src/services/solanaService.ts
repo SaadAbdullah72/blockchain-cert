@@ -15,6 +15,7 @@ import {
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
+  createFreezeAccountInstruction,
 } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import { getAuthorizedAdminAddress, getSolflareProvider, getPhantomProvider } from './walletService';
@@ -365,7 +366,21 @@ export async function mintCertificateOnSolana(params: {
     );
   }
 
-  // G) Solana Memo Program: Permanently stamps the certificate hash & student metadata on the Solana ledger
+  // H) FREEZE Student's ATA — makes this certificate NON-TRANSFERABLE!
+  //    Must run AFTER Metaplex Master Edition (which internally handles mint authority).
+  //    A frozen token account cannot send or receive tokens under any circumstance.
+  //    SoftDesk retains freeze_authority (can unfreeze only if certificate needs to be revoked).
+  transaction.add(
+    createFreezeAccountInstruction(
+      studentTokenAccount,        // the student's token account to freeze
+      nftMintKeypair.publicKey,   // the NFT mint
+      issuerPubkey,               // freeze_authority = SoftDesk connected wallet
+      [],
+      TOKEN_PROGRAM_ID
+    )
+  );
+
+  // I) Solana Memo Program: Permanently stamps the certificate hash & student metadata on the Solana ledger
   const memoPayload = JSON.stringify({
     certId,
     regNo: formData.studentRegNo.trim().toUpperCase(),
