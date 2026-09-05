@@ -15,9 +15,6 @@ import {
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
-  createSetAuthorityInstruction,
-  AuthorityType,
-  createFreezeAccountInstruction,
 } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import { getAuthorizedAdminAddress, getSolflareProvider, getPhantomProvider } from './walletService';
@@ -246,14 +243,13 @@ export async function mintCertificateOnSolana(params: {
 
   // Build Transaction with:
   // A) Create SPL Mint Account (decimals = 0 for 1-of-1 NFT)
-  // B) Initialize SPL Mint (freeze_authority = issuer so we can freeze the ATA)
+  // B) Initialize SPL Mint
   // C) Create Student Associated Token Account (ATA)
   // D) Mint exactly 1 NFT into Student's ATA
-  // E) FREEZE Student's ATA — token account frozen = CANNOT be transferred (non-transferable!)
-  // F) REVOKE Mint Authority — supply permanently locked at 1, no re-minting ever
-  // G) Metaplex Token Metadata V3 (Name, Symbol, JSON metadata — Solflare/Phantom gallery)
-  // H) Metaplex Master Edition V3 (1-of-1 lock — Solflare indexes it into NFTs Tab)
-  // I) Solana Memo Program (Permanently records cert hash & student on-chain)
+  // E) Metaplex Token Metadata V3 — Name, Symbol, JSON (Solflare/Phantom gallery)
+  //    NOTE: Master Edition V3 with maxSupply=0 locks supply to 1 and handles mint authority
+  // F) Metaplex Master Edition V3 — 1-of-1 lock (Solflare indexes it into NFTs tab)
+  // G) Solana Memo — permanently records cert hash & student on-chain
   const transaction = new Transaction();
 
   // A) Create Mint Account
@@ -297,32 +293,6 @@ export async function mintCertificateOnSolana(params: {
       studentTokenAccount,
       issuerPubkey,
       1,
-      [],
-      TOKEN_PROGRAM_ID
-    )
-  );
-
-  // E) FREEZE Student's ATA — makes this NFT non-transferable!
-  //    A frozen token account cannot send or receive tokens.
-  //    Freeze authority stays with SoftDesk (never revoked).
-  transaction.add(
-    createFreezeAccountInstruction(
-      studentTokenAccount,   // token account to freeze
-      nftMintKeypair.publicKey, // mint
-      issuerPubkey,          // freeze_authority = SoftDesk wallet
-      [],
-      TOKEN_PROGRAM_ID
-    )
-  );
-
-  // F) REVOKE Mint Authority — permanently locks supply at 1!
-  //    After this, nobody (not even SoftDesk) can ever mint more of this certificate.
-  transaction.add(
-    createSetAuthorityInstruction(
-      nftMintKeypair.publicKey,
-      issuerPubkey,          // current mint_authority (SoftDesk wallet)
-      AuthorityType.MintTokens,
-      null,                  // new authority = null => permanently revoked
       [],
       TOKEN_PROGRAM_ID
     )
