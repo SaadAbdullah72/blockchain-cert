@@ -8,17 +8,16 @@ import {
   SYSVAR_RENT_PUBKEY,
 } from '@solana/web3.js';
 import {
+  TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  MINT_SIZE,
+  createInitializeMintInstruction,
+  createAssociatedTokenAccountInstruction,
+  createMintToInstruction,
+  getAssociatedTokenAddressSync,
   createSetAuthorityInstruction,
   AuthorityType,
-  TOKEN_2022_PROGRAM_ID,
-  createInitializeMintInstruction as createInitializeMint2022Instruction,
-  createAssociatedTokenAccountInstruction as createATA2022Instruction,
-  createMintToInstruction as createMintTo2022Instruction,
-  getAssociatedTokenAddressSync as getATA2022AddressSync,
-  getMintLen,
-  ExtensionType,
-  createInitializeNonTransferableMintInstruction,
+  createFreezeAccountInstruction,
 } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import { getAuthorizedAdminAddress, getSolflareProvider, getPhantomProvider } from './walletService';
@@ -209,13 +208,12 @@ export async function mintCertificateOnSolana(params: {
   const issueDate = new Date().toISOString().split('T')[0];
   const nftMintKeypair = Keypair.generate();
 
-  // 4. Derive Student's Associated Token Account (ATA) using Token-2022 program
-  //    (Token-2022 is required for NonTransferable extension)
-  const studentTokenAccount = getATA2022AddressSync(
+  // 4. Derive Student's Associated Token Account (ATA)
+  const studentTokenAccount = getAssociatedTokenAddressSync(
     nftMintKeypair.publicKey,
     studentPubkey,
     false,
-    TOKEN_2022_PROGRAM_ID,
+    TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
 
@@ -243,76 +241,77 @@ export async function mintCertificateOnSolana(params: {
   // 7. Compute certificate cryptographic hash
   const { hex: certHashHex } = await computeCertificateHash(formData);
 
-  // 8. Calculate Rent for Token-2022 Mint account (larger than standard MINT_SIZE due to NonTransferable extension)
-  const extensions = [ExtensionType.NonTransferable];
-  const mintLen = getMintLen(extensions);
-  const rentForMint = await connection.getMinimumBalanceForRentExemption(mintLen);
+  // 8. Calculate Rent for SPL Mint account
+  const rentForMint = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
 
   // Build Transaction with:
-  // A) Create Token-2022 Mint Account (with NonTransferable extension — soul-bound NFT)
-  // B) Initialize NonTransferable Extension
-  // C) Initialize Token-2022 Mint (decimals = 0, mint authority = issuer)
-  // D) Create Student Associated Token Account (ATA) via Token-2022
-  // E) Mint 1 NFT directly to Student's Wallet ATA
-  // F) REVOKE Mint Authority (permanently locks supply at 1, no re-minting possible)
-  // G) Metaplex Token Metadata V3 (Attaches Name, Symbol & JSON metadata)
-  // H) Metaplex Master Edition V3 (Locks 1-of-1 NFT so Solflare indexes it into NFTs Tab)
-  // I) Solana Memo Program (Permanently records certificate hash & student on-chain)
+  // A) Create SPL Mint Account (decimals = 0 for 1-of-1 NFT)
+  // B) Initialize SPL Mint (freeze_authority = issuer so we can freeze the ATA)
+  // C) Create Student Associated Token Account (ATA)
+  // D) Mint exactly 1 NFT into Student's ATA
+  // E) FREEZE Student's ATA — token account frozen = CANNOT be transferred (non-transferable!)
+  // F) REVOKE Mint Authority — supply permanently locked at 1, no re-minting ever
+  // G) Metaplex Token Metadata V3 (Name, Symbol, JSON metadata — Solflare/Phantom gallery)
+  // H) Metaplex Master Edition V3 (1-of-1 lock — Solflare indexes it into NFTs Tab)
+  // I) Solana Memo Program (Permanently records cert hash & student on-chain)
   const transaction = new Transaction();
 
-  // A) Create Token-2022 Mint Account with space for NonTransferable extension
+  // A) Create Mint Account
   transaction.add(
     SystemProgram.createAccount({
       fromPubkey: issuerPubkey,
       newAccountPubkey: nftMintKeypair.publicKey,
-      space: mintLen,
+      space: MINT_SIZE,
       lamports: rentForMint,
-      programId: TOKEN_2022_PROGRAM_ID, // Token-2022 program owns this mint
+      programId: TOKEN_PROGRAM_ID,
     })
   );
 
-  // B) Initialize NonTransferable Extension BEFORE initializing the mint
-  //    This makes the NFT soul-bound — it can NEVER be transferred once minted!
+  // B) Initialize Mint (decimals: 0, freeze_authority set so we can freeze ATA)
   transaction.add(
-    createInitializeNonTransferableMintInstruction(
-      nftMintKeypair.publicKey,
-      TOKEN_2022_PROGRAM_ID
-    )
-  );
-
-  // C) Initialize Mint (decimals: 0 for 1-of-1 NFT)
-  //    mint_authority = issuer (SoftDesk wallet), freeze_authority = issuer
-  transaction.add(
-    createInitializeMint2022Instruction(
+    createInitializeMintInstruction(
       nftMintKeypair.publicKey,
       0,
-      issuerPubkey,  // mint_authority = SoftDesk connected wallet
-      issuerPubkey,  // freeze_authority = SoftDesk connected wallet
-      TOKEN_2022_PROGRAM_ID
+      issuerPubkey,  // mint_authority = SoftDesk wallet
+      issuerPubkey,  // freeze_authority = SoftDesk wallet (needed to freeze ATA)
+      TOKEN_PROGRAM_ID
     )
   );
 
-  // D) Create Student's Associated Token Account (ATA) — Token-2022
+  // C) Create Student's Associated Token Account (ATA)
   transaction.add(
-    createATA2022Instruction(
+    createAssociatedTokenAccountInstruction(
       issuerPubkey,
       studentTokenAccount,
       studentPubkey,
       nftMintKeypair.publicKey,
-      TOKEN_2022_PROGRAM_ID,
+      TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
     )
   );
 
-  // E) Mint exactly 1 NFT Token into Student's Token Account
+  // D) Mint exactly 1 NFT into Student's Token Account
   transaction.add(
-    createMintTo2022Instruction(
+    createMintToInstruction(
       nftMintKeypair.publicKey,
       studentTokenAccount,
       issuerPubkey,
       1,
       [],
-      TOKEN_2022_PROGRAM_ID
+      TOKEN_PROGRAM_ID
+    )
+  );
+
+  // E) FREEZE Student's ATA — makes this NFT non-transferable!
+  //    A frozen token account cannot send or receive tokens.
+  //    Freeze authority stays with SoftDesk (never revoked).
+  transaction.add(
+    createFreezeAccountInstruction(
+      studentTokenAccount,   // token account to freeze
+      nftMintKeypair.publicKey, // mint
+      issuerPubkey,          // freeze_authority = SoftDesk wallet
+      [],
+      TOKEN_PROGRAM_ID
     )
   );
 
@@ -321,11 +320,11 @@ export async function mintCertificateOnSolana(params: {
   transaction.add(
     createSetAuthorityInstruction(
       nftMintKeypair.publicKey,
-      issuerPubkey,          // current authority (SoftDesk connected wallet)
+      issuerPubkey,          // current mint_authority (SoftDesk wallet)
       AuthorityType.MintTokens,
       null,                  // new authority = null => permanently revoked
       [],
-      TOKEN_2022_PROGRAM_ID
+      TOKEN_PROGRAM_ID
     )
   );
 
@@ -387,7 +386,7 @@ export async function mintCertificateOnSolana(params: {
           { pubkey: issuerPubkey, isSigner: true, isWritable: false }, // mint_authority
           { pubkey: issuerPubkey, isSigner: true, isWritable: true }, // payer
           { pubkey: metadataPda, isSigner: false, isWritable: true },
-          { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
         ],
