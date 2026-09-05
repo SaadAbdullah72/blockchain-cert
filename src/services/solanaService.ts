@@ -15,6 +15,16 @@ import {
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
+  createSetAuthorityInstruction,
+  AuthorityType,
+  TOKEN_2022_PROGRAM_ID,
+  createInitializeMintInstruction as createInitializeMint2022Instruction,
+  createAssociatedTokenAccountInstruction as createATA2022Instruction,
+  createMintToInstruction as createMintTo2022Instruction,
+  getAssociatedTokenAddressSync as getATA2022AddressSync,
+  getMintLen,
+  ExtensionType,
+  createInitializeNonTransferableMintInstruction,
 } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import { getAuthorizedAdminAddress, getSolflareProvider, getPhantomProvider } from './walletService';
@@ -26,6 +36,11 @@ export type SolanaCluster = 'devnet' | 'testnet';
 const CLUSTER_STORAGE_KEY = 'solana_app_cluster_choice';
 export const METAPLEX_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 export const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+
+// ============================================================
+// SoftDesk Official Minter — ONLY this address can mint certs
+// ============================================================
+export const SOFTDESK_ISSUER_PUBKEY = new PublicKey('3EuGcXELCnkghGve3tDwdfhDzjCNmd1g7T1qha7oERu5');
 
 export function getSelectedCluster(): SolanaCluster {
   try {
@@ -89,10 +104,11 @@ function encodeMetaplexCreateMetadataV3Data(params: {
   sellerFeeBuf.writeUInt16LE(0, 0); // 0% royalty
 
   // Creators: Option<Vec<Creator>> -> Some([Creator { address, verified: 1, share: 100 }])
+  // Creator is ALWAYS the official SoftDesk minter address — hardcoded, never the connected wallet
   const hasCreatorsBuf = Buffer.from([1]); // Some
   const numCreatorsBuf = Buffer.alloc(4);
   numCreatorsBuf.writeUInt32LE(1, 0); // 1 creator
-  const creatorAddressBuf = params.creatorPubkey.toBuffer();
+  const creatorAddressBuf = SOFTDESK_ISSUER_PUBKEY.toBuffer(); // Always SoftDesk official address
   const creatorVerifiedBuf = Buffer.from([1]); // verified
   const creatorShareBuf = Buffer.from([100]); // 100%
 
@@ -153,7 +169,11 @@ export async function computeCertificateHash(data: MintFormData): Promise<{ hex:
 
 /**
  * Mints an official Certificate as a REAL 1-of-1 Metaplex Master Edition NFT on Solana Devnet.
- * Fully compliant with Solflare & Phantom NFT Gallery indexing!
+ * - Creator: Always SoftDesk official address (3EuGcXELCnkghGve3tDwdfhDzjCNmd1g7T1qha7oERu5)
+ * - Owner/Holder: Student's public key (NFT delivered to their wallet ATA)
+ * - Non-Transferable: Uses Token-2022 NonTransferable extension (soul-bound)
+ * - Mint Authority: Revoked after minting (supply permanently locked at 1)
+ * - Gate: Only SoftDesk wallet can call this — all others throw an error
  */
 export async function mintCertificateOnSolana(params: {
   formData: MintFormData;
@@ -195,12 +215,13 @@ export async function mintCertificateOnSolana(params: {
   const issueDate = new Date().toISOString().split('T')[0];
   const nftMintKeypair = Keypair.generate();
 
-  // 4. Derive Student's Associated Token Account (ATA) where the NFT will live
-  const studentTokenAccount = getAssociatedTokenAddressSync(
+  // 4. Derive Student's Associated Token Account (ATA) using Token-2022 program
+  //    (Token-2022 is required for NonTransferable extension)
+  const studentTokenAccount = getATA2022AddressSync(
     nftMintKeypair.publicKey,
     studentPubkey,
     false,
-    TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
 
@@ -228,66 +249,93 @@ export async function mintCertificateOnSolana(params: {
   // 7. Compute certificate cryptographic hash
   const { hex: certHashHex } = await computeCertificateHash(formData);
 
-  // 8. Calculate Rent for SPL Mint account
-  const rentForMint = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
+  // 8. Calculate Rent for Token-2022 Mint account (larger than standard MINT_SIZE due to NonTransferable extension)
+  const extensions = [ExtensionType.NonTransferable];
+  const mintLen = getMintLen(extensions);
+  const rentForMint = await connection.getMinimumBalanceForRentExemption(mintLen);
 
   // Build Transaction with:
-  // A) Create SPL Mint Account (NFT standard: decimals = 0)
-  // B) Initialize SPL Mint
-  // C) Create Student Associated Token Account (ATA)
-  // D) Mint 1 NFT directly to Student's Wallet ATA
-  // E) Metaplex Token Metadata V3 (Attaches Name, Symbol & JSON metadata)
-  // F) Metaplex Master Edition V3 (Locks 1-of-1 NFT so Solflare indexes it into NFTs Tab)
-  // G) Solana Memo Program (Permanently records certificate hash & student on-chain)
+  // A) Create Token-2022 Mint Account (with NonTransferable extension — soul-bound NFT)
+  // B) Initialize NonTransferable Extension
+  // C) Initialize Token-2022 Mint (decimals = 0, mint authority = issuer)
+  // D) Create Student Associated Token Account (ATA) via Token-2022
+  // E) Mint 1 NFT directly to Student's Wallet ATA
+  // F) REVOKE Mint Authority (permanently locks supply at 1, no re-minting possible)
+  // G) Metaplex Token Metadata V3 (Attaches Name, Symbol & JSON metadata)
+  // H) Metaplex Master Edition V3 (Locks 1-of-1 NFT so Solflare indexes it into NFTs Tab)
+  // I) Solana Memo Program (Permanently records certificate hash & student on-chain)
   const transaction = new Transaction();
 
-  // A) Create Mint Account
+  // A) Create Token-2022 Mint Account with space for NonTransferable extension
   transaction.add(
     SystemProgram.createAccount({
       fromPubkey: issuerPubkey,
       newAccountPubkey: nftMintKeypair.publicKey,
-      space: MINT_SIZE,
+      space: mintLen,
       lamports: rentForMint,
-      programId: TOKEN_PROGRAM_ID,
+      programId: TOKEN_2022_PROGRAM_ID, // Token-2022 program owns this mint
     })
   );
 
-  // B) Initialize Mint (decimals: 0 for 1-of-1 NFT)
+  // B) Initialize NonTransferable Extension BEFORE initializing the mint
+  //    This makes the NFT soul-bound — it can NEVER be transferred once minted!
   transaction.add(
-    createInitializeMintInstruction(
+    createInitializeNonTransferableMintInstruction(
       nftMintKeypair.publicKey,
-      0,
-      issuerPubkey,
-      issuerPubkey,
-      TOKEN_PROGRAM_ID
+      TOKEN_2022_PROGRAM_ID
     )
   );
 
-  // C) Create Student's Associated Token Account (ATA)
+  // C) Initialize Mint (decimals: 0 for 1-of-1 NFT)
+  //    mint_authority = issuer (SoftDesk wallet), freeze_authority = issuer
   transaction.add(
-    createAssociatedTokenAccountInstruction(
+    createInitializeMint2022Instruction(
+      nftMintKeypair.publicKey,
+      0,
+      issuerPubkey,  // mint_authority = SoftDesk connected wallet
+      issuerPubkey,  // freeze_authority = SoftDesk connected wallet
+      TOKEN_2022_PROGRAM_ID
+    )
+  );
+
+  // D) Create Student's Associated Token Account (ATA) — Token-2022
+  transaction.add(
+    createATA2022Instruction(
       issuerPubkey,
       studentTokenAccount,
       studentPubkey,
       nftMintKeypair.publicKey,
-      TOKEN_PROGRAM_ID,
+      TOKEN_2022_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
     )
   );
 
-  // D) Mint 1 NFT Token directly into Student's Token Account
+  // E) Mint exactly 1 NFT Token into Student's Token Account
   transaction.add(
-    createMintToInstruction(
+    createMintTo2022Instruction(
       nftMintKeypair.publicKey,
       studentTokenAccount,
       issuerPubkey,
       1,
       [],
-      TOKEN_PROGRAM_ID
+      TOKEN_2022_PROGRAM_ID
     )
   );
 
-  // E) Metaplex Metadata Account (Available on Devnet & Mainnet!)
+  // F) REVOKE Mint Authority — permanently locks supply at 1!
+  //    After this, nobody (not even SoftDesk) can ever mint more of this certificate.
+  transaction.add(
+    createSetAuthorityInstruction(
+      nftMintKeypair.publicKey,
+      issuerPubkey,          // current authority (SoftDesk connected wallet)
+      AuthorityType.MintTokens,
+      null,                  // new authority = null => permanently revoked
+      [],
+      TOKEN_2022_PROGRAM_ID
+    )
+  );
+
+  // G) Metaplex Metadata Account (Available on Devnet & Mainnet!)
   if (cluster === 'devnet') {
     // Upload image + build proper Metaplex JSON metadata file hosted on public CDN
     const nftName = `SoftDesk - ${formData.certificateType.slice(0, 20)}`.slice(0, 32);
@@ -302,7 +350,8 @@ export async function mintCertificateOnSolana(params: {
       eventName: formData.eventName,
       performanceLevel: formData.performanceLevel,
       extraInfo: formData.extraInfo,
-      issuerAddress: connectedWalletAddress,
+      // Always use the hardcoded SoftDesk official address as issuer — not the connected wallet string
+      issuerAddress: SOFTDESK_ISSUER_PUBKEY.toBase58(),
       imageDataUrl: formData.imageDataUrl,
     });
 
@@ -312,7 +361,8 @@ export async function mintCertificateOnSolana(params: {
       name: nftName,
       symbol: 'SDSK',
       uri: metadataUri,
-      creatorPubkey: issuerPubkey,
+      // Creator is ALWAYS the official SoftDesk address — NOT the connected wallet
+      creatorPubkey: SOFTDESK_ISSUER_PUBKEY,
     });
 
     transaction.add(
@@ -321,9 +371,9 @@ export async function mintCertificateOnSolana(params: {
         keys: [
           { pubkey: metadataPda, isSigner: false, isWritable: true },
           { pubkey: nftMintKeypair.publicKey, isSigner: false, isWritable: false },
-          { pubkey: issuerPubkey, isSigner: true, isWritable: false }, // mint_authority
-          { pubkey: issuerPubkey, isSigner: true, isWritable: true }, // payer
-          { pubkey: issuerPubkey, isSigner: true, isWritable: false }, // update_authority
+          { pubkey: issuerPubkey, isSigner: true, isWritable: false }, // mint_authority (connected wallet)
+          { pubkey: issuerPubkey, isSigner: true, isWritable: true }, // payer (connected wallet pays fees)
+          { pubkey: issuerPubkey, isSigner: true, isWritable: false }, // update_authority (connected wallet = SoftDesk)
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
         ],
@@ -331,7 +381,7 @@ export async function mintCertificateOnSolana(params: {
       })
     );
 
-    // F) Metaplex Master Edition V3 Instruction (Tells Solflare this is an authentic Master Edition NFT)
+    // H) Metaplex Master Edition V3 Instruction (Tells Solflare this is an authentic Master Edition NFT)
     const masterEditionData = encodeMetaplexCreateMasterEditionV3Data();
     transaction.add(
       new TransactionInstruction({
